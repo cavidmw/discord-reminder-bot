@@ -52,6 +52,29 @@ def db():
     conn.commit()
     return conn
 
+def parse_month(value: str):
+    if not value or not value.strip():
+        return datetime.now(TZ).month
+
+    v = value.strip().lower()
+
+    months = {
+        "1": 1, "01": 1, "yanvar": 1, "january": 1, "ocak": 1,
+        "2": 2, "02": 2, "fevral": 2, "february": 2, "şubat": 2, "subat": 2,
+        "3": 3, "03": 3, "mart": 3, "march": 3,
+        "4": 4, "04": 4, "aprel": 4, "april": 4, "nisan": 4,
+        "5": 5, "05": 5, "may": 5, "mayıs": 5, "mayis": 5,
+        "6": 6, "06": 6, "iyun": 6, "june": 6, "haziran": 6,
+        "7": 7, "07": 7, "iyul": 7, "july": 7, "temmuz": 7,
+        "8": 8, "08": 8, "avqust": 8, "august": 8, "ağustos": 8, "agustos": 8,
+        "9": 9, "09": 9, "sentyabr": 9, "september": 9, "eylül": 9, "eylul": 9,
+        "10": 10, "oktyabr": 10, "october": 10, "ekim": 10,
+        "11": 11, "noyabr": 11, "november": 11, "kasım": 11, "kasim": 11,
+        "12": 12, "dekabr": 12, "december": 12, "aralık": 12, "aralik": 12,
+    }
+
+    return months.get(v)
+
 
 def add_reminder(user_id, channel_id, remind_at, message):
     conn = db()
@@ -110,11 +133,18 @@ def update_reminder(reminder_id, user_id, remind_at, message):
 
 
 class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
-    tarih = discord.ui.TextInput(
-        label="Tarih",
-        placeholder="Örnek: 2026-05-01",
+    gun = discord.ui.TextInput(
+        label="Gün",
+        placeholder="Örnek: 3",
         required=True,
-        max_length=10
+        max_length=2
+    )
+
+    ay = discord.ui.TextInput(
+        label="Ay",
+        placeholder="Boş bırakılırsa bu ay. Örnek: aprel / april / nisan / 4",
+        required=False,
+        max_length=20
     )
 
     saat = discord.ui.TextInput(
@@ -134,20 +164,31 @@ class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            remind_time = datetime.strptime(
-                f"{self.tarih.value} {self.saat.value}",
-                "%Y-%m-%d %H:%M"
-            ).replace(tzinfo=TZ)
-        except ValueError:
+            day = int(str(self.gun.value).strip())
+            month = parse_month(str(self.ay.value))
+            year = datetime.now(TZ).year
+
+            if month is None:
+                await interaction.response.send_message(
+                    "Ayı anlayamadım. Örnek: `aprel`, `april`, `nisan`, `oktyabr`, `ekim`, `october`, `4`, `10`",
+                    ephemeral=True
+                )
+                return
+
+            hour, minute = map(int, str(self.saat.value).strip().split(":"))
+
+            remind_time = datetime(year, month, day, hour, minute, tzinfo=TZ)
+
+        except Exception:
             await interaction.response.send_message(
-                "Format yanlış. Tarih `2026-05-01`, saat `18:30` şeklinde olmalı.",
+                "Format yanlış. Örnek: Gün `3`, Ay `aprel`, Saat `18:30`",
                 ephemeral=True
             )
             return
 
         if remind_time <= datetime.now(TZ):
             await interaction.response.send_message(
-                "Geçmiş zamana hatırlatıcı kurulmaz.",
+                "Bu tarih/saat geçmişte kaldı. Daha ileri bir zaman seç.",
                 ephemeral=True
             )
             return
@@ -167,7 +208,6 @@ class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
         embed.set_footer(text=f"ID: {rid}")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 class EditTimerModal(discord.ui.Modal):
     def __init__(self, reminder_id: int, old_date: str, old_time: str, old_message: str):
