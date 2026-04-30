@@ -53,10 +53,241 @@ def db():
     return conn
 
 
+def add_reminder(user_id, channel_id, remind_at, message):
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO reminders (user_id, channel_id, remind_at, message) VALUES (?, ?, ?, ?)",
+        (user_id, channel_id, remind_at.isoformat(), message)
+    )
+    conn.commit()
+    rid = cur.lastrowid
+    conn.close()
+    return rid
+
+
+def get_user_reminders(user_id):
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, remind_at, message FROM reminders WHERE user_id = ? ORDER BY remind_at ASC",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_reminder(reminder_id, user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT id, user_id, channel_id, remind_at, message FROM reminders WHERE id = ? AND user_id = ?",
+        (reminder_id, user_id)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def delete_reminder(reminder_id, user_id):
+    conn = db()
+    cur = conn.execute(
+        "DELETE FROM reminders WHERE id = ? AND user_id = ?",
+        (reminder_id, user_id)
+    )
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return deleted > 0
+
+
+def update_reminder(reminder_id, user_id, remind_at, message):
+    conn = db()
+    cur = conn.execute(
+        "UPDATE reminders SET remind_at = ?, message = ? WHERE id = ? AND user_id = ?",
+        (remind_at.isoformat(), message, reminder_id, user_id)
+    )
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+    return updated > 0
+
+
+class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
+    tarih = discord.ui.TextInput(
+        label="Tarih",
+        placeholder="Örnek: 2026-05-01",
+        required=True,
+        max_length=10
+    )
+
+    saat = discord.ui.TextInput(
+        label="Saat",
+        placeholder="Örnek: 18:30",
+        required=True,
+        max_length=5
+    )
+
+    mesaj = discord.ui.TextInput(
+        label="Mesaj",
+        placeholder="Örnek: Video paylaş",
+        required=True,
+        max_length=500,
+        style=discord.TextStyle.paragraph
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            remind_time = datetime.strptime(
+                f"{self.tarih.value} {self.saat.value}",
+                "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=TZ)
+        except ValueError:
+            await interaction.response.send_message(
+                "Format yanlış. Tarih `2026-05-01`, saat `18:30` şeklinde olmalı.",
+                ephemeral=True
+            )
+            return
+
+        if remind_time <= datetime.now(TZ):
+            await interaction.response.send_message(
+                "Geçmiş zamana hatırlatıcı kurulmaz.",
+                ephemeral=True
+            )
+            return
+
+        rid = add_reminder(
+            interaction.user.id,
+            interaction.channel.id,
+            remind_time,
+            str(self.mesaj.value)
+        )
+
+        embed = discord.Embed(
+            title="⏰ Hatırlatıcı Kuruldu",
+            description=f"**Tarih:** {remind_time.strftime('%d.%m.%Y %H:%M')}\n**Mesaj:** {self.mesaj.value}",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"ID: {rid}")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class EditTimerModal(discord.ui.Modal):
+    def __init__(self, reminder_id: int, old_date: str, old_time: str, old_message: str):
+        super().__init__(title=f"Hatırlatıcı Düzenle #{reminder_id}")
+        self.reminder_id = reminder_id
+
+        self.tarih = discord.ui.TextInput(
+            label="Yeni Tarih",
+            default=old_date,
+            placeholder="Örnek: 2026-05-01",
+            required=True,
+            max_length=10
+        )
+
+        self.saat = discord.ui.TextInput(
+            label="Yeni Saat",
+            default=old_time,
+            placeholder="Örnek: 18:30",
+            required=True,
+            max_length=5
+        )
+
+        self.mesaj = discord.ui.TextInput(
+            label="Yeni Mesaj",
+            default=old_message[:500],
+            placeholder="Örnek: Video paylaş",
+            required=True,
+            max_length=500,
+            style=discord.TextStyle.paragraph
+        )
+
+        self.add_item(self.tarih)
+        self.add_item(self.saat)
+        self.add_item(self.mesaj)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            remind_time = datetime.strptime(
+                f"{self.tarih.value} {self.saat.value}",
+                "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=TZ)
+        except ValueError:
+            await interaction.response.send_message(
+                "Format yanlış. Tarih `2026-05-01`, saat `18:30` şeklinde olmalı.",
+                ephemeral=True
+            )
+            return
+
+        if remind_time <= datetime.now(TZ):
+            await interaction.response.send_message(
+                "Geçmiş zamana ayarlayamazsın.",
+                ephemeral=True
+            )
+            return
+
+        ok = update_reminder(
+            self.reminder_id,
+            interaction.user.id,
+            remind_time,
+            str(self.mesaj.value)
+        )
+
+        if not ok:
+            await interaction.response.send_message("Bu hatırlatıcı bulunamadı.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="✏️ Hatırlatıcı Güncellendi",
+            description=f"**Tarih:** {remind_time.strftime('%d.%m.%Y %H:%M')}\n**Mesaj:** {self.mesaj.value}",
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text=f"ID: {self.reminder_id}")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ReminderButtons(discord.ui.View):
+    def __init__(self, reminder_id: int):
+        super().__init__(timeout=300)
+        self.reminder_id = reminder_id
+
+    @discord.ui.button(label="Düzenle", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def edit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        row = get_reminder(self.reminder_id, interaction.user.id)
+
+        if not row:
+            await interaction.response.send_message("Bu hatırlatıcı artıq yoxdur.", ephemeral=True)
+            return
+
+        rid, user_id, channel_id, remind_at, message = row
+        dt = datetime.fromisoformat(remind_at).astimezone(TZ)
+
+        modal = EditTimerModal(
+            reminder_id=rid,
+            old_date=dt.strftime("%Y-%m-%d"),
+            old_time=dt.strftime("%H:%M"),
+            old_message=message
+        )
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Sil", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ok = delete_reminder(self.reminder_id, interaction.user.id)
+
+        if not ok:
+            await interaction.response.send_message("Bu hatırlatıcı tapılmadı.", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(
+            content=f"🗑️ Hatırlatıcı `#{self.reminder_id}` silindi.",
+            embed=None,
+            view=None
+        )
+
+
 @bot.event
 async def on_ready():
     db()
     print(f"Bot giriş yaptı: {bot.user}")
+
     try:
         synced = await bot.tree.sync()
         print(f"Slash komutları yüklendi: {len(synced)}")
@@ -68,8 +299,52 @@ async def on_ready():
         bot.loop.create_task(reminder_loop())
 
 
-@bot.tree.command(name="hatirlat", description="Belirli tarih ve saatte hatırlatma kurar.")
-@app_commands.describe(tarih="Örnek: 2026-05-01", saat="Örnek: 18:30", mesaj="Hatırlatma mesajı")
+@bot.tree.command(name="timer", description="Yeni hatırlatıcı oluşturur.")
+async def timer(interaction: discord.Interaction):
+    await interaction.response.send_modal(TimerModal())
+
+
+@bot.tree.command(name="timerler", description="Tüm hatırlatıcılarını gösterir.")
+async def timerler(interaction: discord.Interaction):
+    rows = get_user_reminders(interaction.user.id)
+
+    if not rows:
+        await interaction.response.send_message("Aktif hatırlatıcın yok.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Toplam **{len(rows)}** hatırlatıcın var. Aşağıda yönetebilirsin:",
+        ephemeral=True
+    )
+
+    for rid, remind_at, message in rows[:10]:
+        dt = datetime.fromisoformat(remind_at).astimezone(TZ)
+
+        embed = discord.Embed(
+            title=f"⏰ Hatırlatıcı #{rid}",
+            description=f"**Tarih:** {dt.strftime('%d.%m.%Y %H:%M')}\n**Mesaj:** {message}",
+            color=discord.Color.blurple()
+        )
+
+        await interaction.followup.send(
+            embed=embed,
+            view=ReminderButtons(rid),
+            ephemeral=True
+        )
+
+    if len(rows) > 10:
+        await interaction.followup.send(
+            "Şimdilik ilk 10 hatırlatıcı gösterildi. Sonra sayfalama da ekleriz.",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="hatirlat", description="Eski sistem: tarih ve saat yazarak hatırlatıcı kurar.")
+@app_commands.describe(
+    tarih="Örnek: 2026-05-01",
+    saat="Örnek: 18:30",
+    mesaj="Hatırlatma mesajı"
+)
 async def hatirlat(interaction: discord.Interaction, tarih: str, saat: str, mesaj: str):
     try:
         remind_time = datetime.strptime(f"{tarih} {saat}", "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
@@ -84,59 +359,12 @@ async def hatirlat(interaction: discord.Interaction, tarih: str, saat: str, mesa
         await interaction.response.send_message("Geçmiş zamana hatırlatma kurulmaz.", ephemeral=True)
         return
 
-    conn = db()
-    conn.execute(
-        "INSERT INTO reminders (user_id, channel_id, remind_at, message) VALUES (?, ?, ?, ?)",
-        (interaction.user.id, interaction.channel.id, remind_time.isoformat(), mesaj)
-    )
-    conn.commit()
-    conn.close()
+    rid = add_reminder(interaction.user.id, interaction.channel.id, remind_time, mesaj)
 
     await interaction.response.send_message(
-        f"Tamamdır. Seni **{remind_time.strftime('%d.%m.%Y %H:%M')}** tarihinde uyaracağım.\nMesaj: `{mesaj}`",
+        f"Tamamdır. Seni **{remind_time.strftime('%d.%m.%Y %H:%M')}** tarihinde uyaracağım.\nMesaj: `{mesaj}`\nID: `#{rid}`",
         ephemeral=True
     )
-
-
-@bot.tree.command(name="hatirlatmalar", description="Aktif hatırlatmalarını gösterir.")
-async def hatirlatmalar(interaction: discord.Interaction):
-    conn = db()
-    rows = conn.execute(
-        "SELECT id, remind_at, message FROM reminders WHERE user_id = ? ORDER BY remind_at ASC",
-        (interaction.user.id,)
-    ).fetchall()
-    conn.close()
-
-    if not rows:
-        await interaction.response.send_message("Aktif hatırlatman yok.", ephemeral=True)
-        return
-
-    text = "**Aktif hatırlatmaların:**\n\n"
-    for rid, remind_at, message in rows:
-        dt = datetime.fromisoformat(remind_at).astimezone(TZ)
-        text += f"`#{rid}` — {dt.strftime('%d.%m.%Y %H:%M')} — {message}\n"
-
-    await interaction.response.send_message(text, ephemeral=True)
-
-
-@bot.tree.command(name="hatirlatma_sil", description="Hatırlatma ID ile siler.")
-async def hatirlatma_sil(interaction: discord.Interaction, reminder_id: int):
-    conn = db()
-    row = conn.execute(
-        "SELECT id FROM reminders WHERE id = ? AND user_id = ?",
-        (reminder_id, interaction.user.id)
-    ).fetchone()
-
-    if not row:
-        conn.close()
-        await interaction.response.send_message("Bu ID ilə sənə aid hatırlatma tapılmadı.", ephemeral=True)
-        return
-
-    conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-    conn.commit()
-    conn.close()
-
-    await interaction.response.send_message(f"`#{reminder_id}` silindi.", ephemeral=True)
 
 
 async def reminder_loop():
@@ -159,6 +387,7 @@ async def reminder_loop():
 
             conn.commit()
             conn.close()
+
         except Exception as e:
             print("Reminder loop hatası:", e)
 
