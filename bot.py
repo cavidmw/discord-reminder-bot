@@ -142,7 +142,7 @@ class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
 
     ay = discord.ui.TextInput(
         label="Ay",
-        placeholder="Boş bırakılırsa bu ay. Örnek: aprel / april / nisan / 4",
+        placeholder="Boş bırakılırsa bu ay.",
         required=False,
         max_length=20
     )
@@ -156,7 +156,7 @@ class TimerModal(discord.ui.Modal, title="Yeni Hatırlatıcı"):
 
     mesaj = discord.ui.TextInput(
         label="Mesaj",
-        placeholder="Örnek: Video paylaş",
+        placeholder=" ",
         required=True,
         max_length=500,
         style=discord.TextStyle.paragraph
